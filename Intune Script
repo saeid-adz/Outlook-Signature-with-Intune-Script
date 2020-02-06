@@ -1,0 +1,126 @@
+
+
+<#
+This function is working for log system.
+All of logs will be generated in a folder in the "C:\Signaturelogs"
+If you faced any issue, you only need to check the log file
+#>
+Function Signature-Logs {
+ 
+    Param (
+    [parameter(Mandatory = $True)]
+    [String]$Value
+    )
+    
+    $time = Get-Date -Format F 
+    $Log = $Value+" ---> "+$time
+    
+    Add-Content -Path C:\SignatureLogs\SignatureLogs.text -Value $log  -Force 
+    }
+
+$LogFolder = New-Item -Name "SignatureLogs" -Path "C:\" -ItemType Directory -Force
+
+<#
+We have to check the path before to start the automation script. 
+this part wil checking that the outlook email is installed or not! 
+#>
+If (Test-Path -Path Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Office) {
+Signature-Logs -Value "-------------------- We found the path, Signature automation process getting start ---------------------------"
+
+#Get correct path of Outlook app from registery 
+$OfficeVersion = (Get-ItemProperty -Path Registry::HKEY_CLASSES_ROOT\Outlook.Application\CurVer). "(Default)".split('.')[2] + ".0" 
+#Get Name of Outlook Signature Folder 
+$OutlookSigDirName = (Get-ItemProperty -Path Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Office\$OfficeVersion\Common\General). "Signatures"
+$Identity = Get-ItemProperty -Path "Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Office\$OfficeVersion\Common\Identity"
+$UserID =  $Identity.ADUserName
+Signature-Logs -Value "We found $UserID as the system account"
+#Build Path for Outlook Signature 
+$OutlookSigLocalPath = "${env:appdata}\Microsoft\$OutlookSigDirName"
+Signature-Logs -Value "The Signature path in $OutlookSigLocalPath is available"
+
+<#
+Connect to the Microsoft Graph API and get user information
+For the first part we have to post a reqques for the token 
+Application (client) ID, tenant Name and secret
+#>
+ 
+$clientId = "{App ID in Azure}"
+$tenantName = "YourTenantName.onmicrosoft.com"
+$clientSecret = "{Secret ID in Azure}"
+$resource = "https://graph.microsoft.com/"
+
+
+$ReqTokenBody = @{
+    Grant_Type    = "client_credentials"
+    Scope         = "https://graph.microsoft.com/.default"
+    client_Id     = $clientID
+    Client_Secret = $clientSecret
+} 
+
+$TokenResponse = Invoke-RestMethod -Uri "https://login.microsoftonline.com/$TenantName/oauth2/v2.0/token" -Method POST -Body $ReqTokenBody
+
+
+
+#After token request we can get the user information and this case we using the Beta version of Microsoft API 
+$apiUrl = "https://graph.microsoft.com/beta/users/$UserID"
+$Data = Invoke-RestMethod -Headers @{Authorization = "Bearer $($Tokenresponse.access_token)"} -Uri $apiUrl -Method Get
+
+
+
+#We uploaded the signature template to a online place as a zip file so in this step we will download it to the temp folder of users
+$Path= $env:TEMP
+Invoke-WebRequest -Uri "{Signature ziped file in the online place}" -Verbose *> $path\Downloadlog.text 
+[String]$DownloadLog = Get-Content -Path  $path\Downloadlog.text 
+Signature-Logs -Value $DownloadLog
+
+#We need to remove old signature, so in this part script will be removed the all files in the signature source folder 
+Get-ChildItem -Path $OutlookSigLocalPath | Remove-Item -Recurse
+
+#Extract the zip file which is downloaded to the temp folder, to the outlook signature folder
+Expand-Archive  -LiteralPath "$path\Signatures.zip" -DestinationPath $OutlookSigLocalPath -Force -Verbose *> $path\Expandlog.text 
+[String]$ExpandLog = Get-Content -Path  $path\Expandlog.text  
+Signature-Logs -Value $ExpandLog
+
+#Now we need to add API information of user to the readable variable 
+$DisplayName = $data.DisplayName
+$Role = $data.jobTitle
+$Street = $data.streetAddress
+$PostCode = $data.postalCode
+$City = $data.city
+$Country = $data.Country
+$Email = $data.Mail
+$MobileNumber = $data.mobilePhone
+
+#We have to get the content of html file which is located to the signature folder, then we will replace all of vaiable with items in the file
+$content = Get-Content -Path "$OutlookSigLocalPath\htmlfile.htm"
+$NewContet = $Content -replace ("FIRSTANDLATNAME","$DisplayName") -replace ("Role","$Role") -replace ("Street","$Street") -replace ("PostCode","$PostCode") -replace ("City","$City") -replace ("Country","$Country") -replace ("EmailAddress","$Email") -replace ("MobileNumber","$MobileNumber")
+#Finally we will save the the new content to the current file
+$NewContet | Out-File -FilePath "$OutlookSigLocalPath\htmlfile.htm" -Force
+
+
+<#
+Registery Part
+#we have to set two values in the registery for the new email and replay email. these values working for the add signature automaticly 
+when user wants to send new email or a replay email 
+#>
+$RegisteryPath = "Registry::HKEY_CURRENT_USER\SOFTWARE\Microsoft\Office\$OfficeVersion\Common\MailSettings"
+
+$NewEmailRegName = "NewSignature"
+
+$ReplayEmailRegValue = "ReplySignature"
+
+$RegValue = "{HTML File Name}"
+
+$NewEmailRegLog = New-ItemProperty -Path $RegisteryPath -Value $RegValue -Name $NewEmailRegName -PropertyType ExpandString -Force
+$ReplayEmailRelLog = New-ItemProperty -Path $RegisteryPath -Value $RegValue -Name $ReplayEmailRegValue -PropertyType ExpandString -Force
+
+Signature-Logs -Value $NewEmailRegLog
+Signature-Logs -Value $ReplayEmailRelLog
+
+$IntuneLog = Get-Content -Path C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\IntuneManagementExtension.log
+$IntuneLog = ""
+$IntuneLog | Out-File -FilePath C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\IntuneManagementExtension.log -Force
+
+} else {
+    Signature-Logs -Value "There is no any office products in this PC" 
+}
